@@ -1,6 +1,8 @@
 import logging
 from json import JSONDecodeError
 
+from tortoise.contrib.pydantic import pydantic_model_creator, pydantic_queryset_creator
+
 from models import Contact
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -14,16 +16,27 @@ from tortoise.contrib.starlette import register_tortoise
 
 app = Starlette()
 
+Contact_Pydantic = pydantic_model_creator(Contact)
+Contact_Pydantic_List = pydantic_queryset_creator(Contact)
+
 
 @app.route("/contacts", methods=["GET"])
 async def get_contacts(_: Request) -> JSONResponse:
-    contacts = await Contact.all()
+    contacts = await Contact_Pydantic_List.from_queryset(Contact.all())
+    return JSONResponse(content=contacts.dict()['__root__'])
 
-    res = []
-    for contact in contacts:
-        res.append({"id": contact.id, "name": contact.name, "phone": contact.phone})
 
-    return JSONResponse(content=res)
+@app.route("/contacts/{id}", methods=["GET"])
+async def get_contact(request):
+    contact_id = request.path_params['id']
+    contact = await Contact.get_or_none(id=contact_id)
+    if contact is None:
+        return JSONResponse({"error": f"No contact found with id = {contact_id}"},
+                            status_code=status.HTTP_404_NOT_FOUND)
+
+    contactpy = await Contact_Pydantic.from_tortoise_orm(contact)
+
+    return JSONResponse(content=contactpy.dict())
 
 
 @app.route("/contacts", methods=["POST"])
@@ -46,20 +59,6 @@ async def create_contact(request: Request) -> JSONResponse:
 
     return JSONResponse(content={"id": contact.id, "name": contact.name, "phone": contact.phone},
                         status_code=status.HTTP_201_CREATED)
-
-
-@app.route("/contacts/{id}", methods=["GET"])
-async def get_contact(request):
-    contact_id = request.path_params['id']
-    contact = await Contact.get_or_none(id=contact_id)
-
-    if contact is None:
-        return JSONResponse({
-            "error":
-                f"No contact found with id = {contact_id}"
-        }, status_code=status.HTTP_404_NOT_FOUND)
-
-    return JSONResponse(content={"id": contact.id, "name": contact.name, "phone": contact.phone})
 
 
 @app.route("/contacts/{id}", methods=["DELETE"])
@@ -103,6 +102,7 @@ async def update_contact(request):
 
     if name is not None:
         contact.name = name
+
     if phone is not None:
         if not str(phone).isnumeric():
             return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST,
@@ -111,8 +111,9 @@ async def update_contact(request):
 
     await contact.save()
 
-    return JSONResponse(content={"id": contact.id, "name": contact.name, "phone": contact.phone},
-                        status_code=status.HTTP_200_OK)
+    contactpy = await Contact_Pydantic.from_tortoise_orm(contact)
+
+    return JSONResponse(content=contactpy.dict())
 
 
 register_tortoise(
